@@ -1,6 +1,7 @@
 version: "2.3"
 services:
   detectron2:
+    image: d2_onnx_export:0.0.1
     build:
       context: .
       dockerfile: Dockerfile
@@ -17,10 +18,12 @@ services:
       memlock: -1
       stack: 67108864
     volumes:
+      - ..:/home/appuser/detectron2
       - /tmp/.X11-unix:/tmp/.X11-unix:ro
     environment:
       - DISPLAY=$DISPLAY
       - NVIDIA_VISIBLE_DEVICES=all
+    tty: true
     # Uncomment with proper source to access webcam from docker
     # devices: 
     #   - /dev/video0:/dev/video0

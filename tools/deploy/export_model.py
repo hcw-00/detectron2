@@ -19,7 +19,14 @@ from detectron2.structures import Boxes
 from detectron2.utils.env import TORCH_VERSION
 from detectron2.utils.file_io import PathManager
 from detectron2.utils.logger import setup_logger
-
+import functools
+from tools.partial import (
+    preprocess_image_onnx,
+    forward_onnx,
+    forward_inference_onnx,
+    anchor_generator_forward_for_onnx,
+    inference_single_image_onnx
+)
 
 def setup_cfg(args):
     cfg = get_cfg()
@@ -30,6 +37,28 @@ def setup_cfg(args):
     cfg.merge_from_list(args.opts)
     cfg.freeze()
     return cfg
+
+def export_onnx(torch_model):
+    # import pdb;pdb.set_trace()
+    if isinstance(torch_model, RetinaNet):
+        torch_model.preprocess_image = functools.partial(preprocess_image_onnx, torch_model)
+        torch_model.inference_single_image = functools.partial(inference_single_image_onnx, torch_model)
+        torch_model.forward = functools.partial(forward_onnx, torch_model)
+        torch_model.forward_inference = functools.partial(forward_inference_onnx, torch_model)
+        torch_model.anchor_generator.forward = functools.partial(anchor_generator_forward_for_onnx, torch_model.anchor_generator)
+    else:
+        raise NotImplementedError
+    # generate dummy input 
+    dummy_input = torch.ones((1,3,1024,1024), requires_grad=False)
+    save_name = 'retinanet_R_50_FPN_1x.onnx'
+    with torch.no_grad():
+        torch_model.to('cpu')
+        torch.onnx.export(
+            torch_model, dummy_input, save_name,
+            input_names = ['input'], output_names = ['anchors', 'box_delta', 'pred_logits', 'box_cls'],
+            export_params=True, opset_version=13, do_constant_folding=True,
+            dynamic_axes=None, verbose=True)
+    print("Saved ONNX file.")
 
 
 def export_caffe2_tracing(cfg, torch_model, inputs):
@@ -181,7 +210,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--export-method",
-        choices=["caffe2_tracing", "tracing", "scripting"],
+        choices=["caffe2_tracing", "tracing", "scripting", "onnx"],
         help="Method to export models",
         default="tracing",
     )
@@ -198,7 +227,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     logger = setup_logger()
     logger.info("Command line arguments: " + str(args))
-    PathManager.mkdirs(args.output)
+    # PathManager.mkdirs(args.output)
     # Disable respecialization on new shapes. Otherwise --run-eval will be slow
     torch._C._jit_set_bailout_depth(1)
 
@@ -210,7 +239,8 @@ if __name__ == "__main__":
     torch_model.eval()
 
     # get sample data
-    sample_inputs = get_sample_inputs(args)
+    if args.export_method != "onnx":
+        sample_inputs = get_sample_inputs(args)
 
     # convert and save model
     if args.export_method == "caffe2_tracing":
@@ -219,6 +249,8 @@ if __name__ == "__main__":
         exported_model = export_scripting(torch_model)
     elif args.export_method == "tracing":
         exported_model = export_tracing(torch_model, sample_inputs)
+    elif args.export_method == "onnx":
+        exported_model = export_onnx(torch_model)
 
     # run evaluation with the converted model
     if args.run_eval:
