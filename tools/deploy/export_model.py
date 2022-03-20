@@ -56,7 +56,7 @@ def export_onnx(torch_model):
         torch.onnx.export(
             torch_model, dummy_input, save_name,
             input_names = ['input'], output_names = ['anchors', 'box_delta', 'pred_logits', 'box_cls'],
-            export_params=True, opset_version=13, do_constant_folding=True,
+            export_params=True, opset_version=11, do_constant_folding=True,
             dynamic_axes=None, verbose=True)
     print("Saved ONNX file.")
 
