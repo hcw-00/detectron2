@@ -25,7 +25,6 @@ from tools.partial import (
     forward_onnx,
     forward_inference_onnx,
     anchor_generator_forward_for_onnx,
-    inference_single_image_onnx
 )
 
 def setup_cfg(args):
@@ -38,24 +37,27 @@ def setup_cfg(args):
     cfg.freeze()
     return cfg
 
-def export_onnx(torch_model):
+def export_onnx(torch_model, sample_image=None):
     # import pdb;pdb.set_trace()
     if isinstance(torch_model, RetinaNet):
         torch_model.preprocess_image = functools.partial(preprocess_image_onnx, torch_model)
-        torch_model.inference_single_image = functools.partial(inference_single_image_onnx, torch_model)
         torch_model.forward = functools.partial(forward_onnx, torch_model)
         torch_model.forward_inference = functools.partial(forward_inference_onnx, torch_model)
         torch_model.anchor_generator.forward = functools.partial(anchor_generator_forward_for_onnx, torch_model.anchor_generator)
     else:
         raise NotImplementedError
     # generate dummy input 
-    dummy_input = torch.ones((1,3,1024,1024), requires_grad=False)
+    if sample_image is not None:
+        dummy_input = sample_image[0]['image']
+        dummy_input = torch.unsqueeze(dummy_input, 0)
+    else:
+        dummy_input = torch.ones((1,3,800,800), requires_grad=False)
     save_name = 'retinanet_R_50_FPN_1x.onnx'
     with torch.no_grad():
         torch_model.to('cpu')
         torch.onnx.export(
             torch_model, dummy_input, save_name,
-            input_names = ['input'], output_names = ['anchors', 'box_delta', 'pred_logits', 'box_cls'],
+            input_names = ['input'], output_names = ['anchors', 'box_delta', 'pred_logits'],
             export_params=True, opset_version=11, do_constant_folding=True,
             dynamic_axes=None, verbose=True)
     print("Saved ONNX file.")
@@ -144,6 +146,7 @@ def export_tracing(torch_model, inputs):
     else:
         inference = None  # assume that we just call the model directly
 
+    # import pdb;pdb.set_trace()
     traceable_model = TracingAdapter(torch_model, inputs, inference)
 
     if args.format == "torchscript":
@@ -215,6 +218,7 @@ if __name__ == "__main__":
         default="tracing",
     )
     parser.add_argument("--config-file", default="", metavar="FILE", help="path to config file")
+    parser.add_argument("--weight-file", default=None, metavar="FILE", help="path to weight file")
     parser.add_argument("--sample-image", default=None, type=str, help="sample image for input")
     parser.add_argument("--run-eval", action="store_true")
     parser.add_argument("--output", help="output directory for the converted model")
@@ -235,10 +239,14 @@ if __name__ == "__main__":
 
     # create a torch model
     torch_model = build_model(cfg)
-    DetectionCheckpointer(torch_model).resume_or_load(cfg.MODEL.WEIGHTS)
+    if args.weight_file is not None:
+        DetectionCheckpointer(torch_model).resume_or_load(args.weight_file)
+    else:
+        DetectionCheckpointer(torch_model).resume_or_load(cfg.MODEL.WEIGHTS)
     torch_model.eval()
 
     # get sample data
+    sample_inputs = None
     if args.export_method != "onnx":
         sample_inputs = get_sample_inputs(args)
 
@@ -250,7 +258,7 @@ if __name__ == "__main__":
     elif args.export_method == "tracing":
         exported_model = export_tracing(torch_model, sample_inputs)
     elif args.export_method == "onnx":
-        exported_model = export_onnx(torch_model)
+        exported_model = export_onnx(torch_model, sample_inputs)
 
     # run evaluation with the converted model
     if args.run_eval:

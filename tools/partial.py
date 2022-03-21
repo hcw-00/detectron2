@@ -29,7 +29,8 @@ def preprocess_image_onnx(self, batched_inputs: List[Dict[str, Tensor]]):
     # images = [(x - self.pixel_mean) / self.pixel_std for x in images]
     # images = ImageList.from_tensors(images, self.backbone.size_divisibility)
     pixel_mean = [103.530, 116.280, 123.675]
-    pixel_std = [57.375, 57.12, 58.395]
+    # pixel_std = [57.375, 57.12, 58.395]
+    pixel_std = [1.0, 1.0, 1.0]
     images = transforms.Normalize(mean=pixel_mean, std=pixel_std)(batched_inputs)    
     return images
 
@@ -45,7 +46,7 @@ def forward_onnx(self, batched_inputs: List[Dict[str, Tensor]]):
 def forward_inference_onnx(
         self, images, features: List[Tensor], predictions: List[List[Tensor]]
     ):
-    pred_logits, pred_anchor_deltas = self._transpose_dense_predictions(
+    pred_logits, pred_deltas = self._transpose_dense_predictions(
         predictions, [self.num_classes, 4]
     )
     anchors_ = self.anchor_generator(features)
@@ -55,23 +56,11 @@ def forward_inference_onnx(
             pickle.dump(anchors_, f)
     with open(anchor_file_name, 'rb') as f:
         anchors = pickle.load(f)
-    scores_per_image = pred_logits
-    deltas_per_image = pred_anchor_deltas
-    anchors, box_cls, box_delta = self.inference_single_image(
-        anchors, scores_per_image, deltas_per_image
-    )
+    
+    anchors = torch.unsqueeze(torch.cat(anchors), 0)
+    pred_deltas = torch.cat(pred_deltas, 1)
     pred_logits = torch.cat(pred_logits, 1)
     anchors = xyxy_to_xywh(anchors)
-    return anchors, box_delta, pred_logits, box_cls
+    
+    return anchors, pred_deltas, pred_logits #, box_cls
 
-def inference_single_image_onnx(
-        self,
-        anchors: List, #[Boxes],
-        box_cls: List[Tensor],
-        box_delta: List[Tensor],
-        #image_size: Tuple[int, int],
-    ):
-    anchors = torch.unsqueeze(torch.cat(anchors), 0)
-    box_cls = torch.cat(box_cls, 1)
-    box_delta = torch.cat(box_delta, 1)
-    return anchors, box_cls, box_delta
